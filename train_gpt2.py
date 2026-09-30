@@ -5,6 +5,8 @@ import torch.nn as nn
 from torch import Tensor
 from torch.nn import functional as F
 
+import tiktoken
+
 @dataclass
 class GPTConfig:
     block_size: int = 1024
@@ -77,7 +79,7 @@ class GPT(nn.Module):
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
-    def forward(self, idx):
+    def forward(self, idx, targets=None):
         B, T = idx.size()
         assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
 
@@ -89,7 +91,11 @@ class GPT(nn.Module):
             x = block(x)
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x)  # B, T, vocab_size
-        return logits
+
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.shape[-1]), targets.view(-1))
+        return logits, loss
 
     @classmethod
     def from_pretrained(cls, model_type):
@@ -133,24 +139,30 @@ class GPT(nn.Module):
         return model
 
 def pipeline_like():
+    device = 'cpu'
+    if torch.cuda.is_available():
+        device = 'cuda'
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        device = 'mps'
+    print(f'using device: {device}')
+
     num_return_sequences = 5
     max_length = 30
 
     model = GPT.from_pretrained('gpt2')
     model.eval()
-    model.to('mps')
+    model.to(device)
 
-    import tiktoken
     enc = tiktoken.get_encoding('gpt2')
     tokens = enc.encode("Hello, I'm a language model,")
     tokens = torch.tensor(tokens, dtype=torch.long)  # (8,)
     tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)  # (5, 8)
-    x = tokens.to('mps')
+    x = tokens.to(device)
 
     torch.manual_seed(42)
     while x.size(1) < max_length:
         with torch.no_grad():
-            logits = model(x)  # B, T, vocab_size
+            logits, _ = model(x)  # B, T, vocab_size
             logits = logits[:,-1,:]  # B, vocab_size
             probs = F.softmax(logits, dim=-1)  # B, vocab_size
             topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)  # B, 50
@@ -163,5 +175,35 @@ def pipeline_like():
         decode = enc.decode(tokens)
         print(">", decode)
 
+def f():
+    # attempt to autodetect the device
+    device = 'cpu'
+    if torch.cuda.is_available():
+        device = 'cuda'
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        device = 'mps'
+    print(f'using device: {device}')
+
+    with open('input.txt', 'r') as f:
+        text = f.read()
+        text = text[:1000]
+
+    enc = tiktoken.get_encoding('gpt2')
+    tokens = enc.encode(text)
+
+    B, T = 4, 32
+    buf = torch.tensor(tokens[:B*T+1])
+    x = buf[:-1].view(B, T)
+    y = buf[1:].view(B, T)
+    x = x.to(device)
+    y = y.to(device)
+
+    model = GPT(GPTConfig())
+    model.to(device)
+    logits, loss = model(x, y)
+    print(loss)
+
+
 if __name__ == '__main__':
-    pipeline_like()
+    # pipeline_like()
+    f()
