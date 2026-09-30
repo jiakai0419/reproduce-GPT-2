@@ -91,7 +91,7 @@ class GPT(nn.Module):
             x = block(x)
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x)  # B, T, vocab_size
-
+        
         loss = None
         if targets is not None:
             loss = F.cross_entropy(logits.view(-1, logits.shape[-1]), targets.view(-1))
@@ -149,7 +149,8 @@ def pipeline_like():
     num_return_sequences = 5
     max_length = 30
 
-    model = GPT.from_pretrained('gpt2')
+    # model = GPT.from_pretrained('gpt2')
+    model = GPT(GPTConfig())
     model.eval()
     model.to(device)
 
@@ -162,7 +163,7 @@ def pipeline_like():
     torch.manual_seed(42)
     while x.size(1) < max_length:
         with torch.no_grad():
-            logits, _ = model(x)  # B, T, vocab_size
+            logits = model(x)  # B, T, vocab_size
             logits = logits[:,-1,:]  # B, vocab_size
             probs = F.softmax(logits, dim=-1)  # B, vocab_size
             topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)  # B, 50
